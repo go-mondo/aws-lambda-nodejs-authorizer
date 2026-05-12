@@ -38,7 +38,7 @@ describe("MondoAuthorizer", () => {
     template.hasResourceProperties("AWS::Lambda::Function", {
       Environment: {
         Variables: {
-          MONDO_AUDIENCE: '"https://app.mondoidentity.com"',
+          MONDO_AUDIENCE: "https://app.mondoidentity.com",
           MONDO_CONTEXT_CLAIMS: '{"scopes":"scope"}',
           MONDO_IDP_DOMAIN_NAME: "mondo.auth.mondoidentity.com",
           MONDO_REQUIRED_CLAIMS: '{"scope":["openid","email"]}',

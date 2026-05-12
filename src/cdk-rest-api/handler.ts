@@ -50,16 +50,11 @@ export const handler = createRestApiAuthorizerHandler();
 
 export function createRestApiAuthorizerHandler(options: RestApiAuthorizerHandlerOptions = {}) {
   return async (event: APIGatewayTokenAuthorizerEvent): Promise<APIGatewayAuthorizerResult> => {
-    logger.info("REST API authorizer request received", {
-      hasAuthorizationToken: Boolean(event.authorizationToken),
-      methodArn: event.methodArn,
-    });
-
     try {
       const token = getBearerToken(event.authorizationToken);
       const { payload } = await verifyToken(token);
 
-      logger.info("REST API authorizer token verified", getSafeClaimLogContext(payload));
+      logger.info("Token verified", { context: getSafeClaimLogContext(payload) });
 
       assertRequiredClaims(payload, getRequiredClaims());
       await validateCustomClaims(payload, options.validateClaims);
@@ -83,16 +78,12 @@ export function createRestApiAuthorizerHandler(options: RestApiAuthorizerHandler
         principalId,
       });
 
-      logger.info("REST API authorizer request allowed", {
-        contextKeys: Object.keys(compactContext(context)),
-        methodArn: event.methodArn,
-        principalId,
-      });
+      logger.debug("Authorizer success", { output: result });
 
       return result;
     } catch (error) {
       if (!isUnauthorizedError(error)) {
-        logger.error("REST API authorizer failed", { error });
+        logger.error("Authorizer failed", { error });
       }
 
       throw error;
@@ -120,7 +111,9 @@ export function getBearerToken(authorizationToken?: string): string {
   }
 
   logger.debug("Bearer token extracted from authorization header", {
-    tokenLength: token.length,
+    token: {
+      length: token.length,
+    },
   });
 
   return token;
@@ -137,8 +130,10 @@ export async function verifyToken(token: string) {
 
   try {
     logger.debug("Verifying JWT", {
-      audience,
-      issuer: discovery.configuration.issuer,
+      match: {
+        audience,
+        issuer: discovery.configuration.issuer,
+      },
     });
 
     return await jwtVerify(token, discovery.jwks, verifyOptions);
@@ -248,20 +243,18 @@ function authorizerResult(input: {
 
 async function getDiscovery(): Promise<DiscoveryCacheEntry> {
   if (discoveryCache) {
-    logger.debug("Using cached OIDC discovery configuration", {
-      issuer: discoveryCache.configuration.issuer,
-      jwksUri: discoveryCache.configuration.jwks_uri,
-    });
+    logger.debug("Using cached OIDC discovery configuration");
 
     return discoveryCache;
   }
 
   const idpDomainName = getRequiredEnv("MONDO_IDP_DOMAIN_NAME");
-  const discoveryUrl = `${normalizeIssuerBaseUrl(idpDomainName)}/.well-known/openid-configuration`;
+  const normalizedIdpDomainName = stripWrappingQuotes(idpDomainName);
+  const discoveryUrl = `${normalizeIssuerBaseUrl(normalizedIdpDomainName)}/.well-known/openid-configuration`;
 
   logger.info("Fetching OIDC discovery configuration", {
     discoveryUrl,
-    idpDomainName,
+    idpDomainName: normalizedIdpDomainName,
   });
 
   const response = await fetch(discoveryUrl);
@@ -303,7 +296,7 @@ async function getDiscovery(): Promise<DiscoveryCacheEntry> {
 }
 
 function getAudience(): string | string[] {
-  const rawAudience = getRequiredEnv("MONDO_AUDIENCE");
+  const rawAudience = stripWrappingQuotes(getRequiredEnv("MONDO_AUDIENCE"));
 
   try {
     const parsedAudience = JSON.parse(rawAudience) as unknown;
@@ -401,6 +394,19 @@ function normalizeIssuerBaseUrl(idpDomainName: string): string {
   }
 
   return `https://${trimmedValue}`;
+}
+
+function stripWrappingQuotes(value: string): string {
+  const trimmedValue = value.trim();
+
+  if (
+    (trimmedValue.startsWith('"') && trimmedValue.endsWith('"')) ||
+    (trimmedValue.startsWith("'") && trimmedValue.endsWith("'"))
+  ) {
+    return trimmedValue.slice(1, -1);
+  }
+
+  return trimmedValue;
 }
 
 function stringifyContextValue(value: unknown): string | undefined {

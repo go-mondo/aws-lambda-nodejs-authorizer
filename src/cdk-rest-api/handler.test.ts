@@ -111,18 +111,19 @@ describe("REST API authorizer helpers", () => {
   });
 
   it("normalizes JWT verification failures to Unauthorized", async () => {
-    process.env.MONDO_AUDIENCE = '"https://app.mondoidentity.com"';
-    process.env.MONDO_IDP_DOMAIN_NAME = "mondo.auth.mondoidentity.com";
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({
-          issuer: "https://mondo.auth.mondoidentity.com",
-          jwks_uri: "https://mondo.auth.mondoidentity.com/.well-known/jwks.json",
-        }),
-      ),
+    process.env.MONDO_AUDIENCE = "https://app.mondoidentity.com";
+    process.env.MONDO_IDP_DOMAIN_NAME = '"mondo.auth.mondoidentity.com"';
+    const fetch = vi.fn(async () =>
+      Response.json({
+        issuer: "https://mondo.auth.mondoidentity.com",
+        jwks_uri: "https://mondo.auth.mondoidentity.com/.well-known/jwks.json",
+      }),
     );
+    vi.stubGlobal("fetch", fetch);
 
     await expect(verifyToken("not-a-jwt")).rejects.toThrow("Unauthorized");
+    expect(fetch).toHaveBeenCalledWith(
+      "https://mondo.auth.mondoidentity.com/.well-known/openid-configuration",
+    );
   });
 });

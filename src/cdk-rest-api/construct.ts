@@ -95,7 +95,8 @@ function buildMondoEnvironment(props: MondoAuthorizerHandlerProps): Record<strin
   const environment: Record<string, string> = {};
 
   if (props.audience) {
-    environment.MONDO_AUDIENCE = JSON.stringify(props.audience);
+    environment.MONDO_AUDIENCE =
+      typeof props.audience === "string" ? props.audience : JSON.stringify(props.audience);
   }
 
   if (props.domainName) {
