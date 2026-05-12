@@ -1,3 +1,4 @@
+import { Logger } from "@aws-lambda-powertools/logger";
 import type { APIGatewayAuthorizerResult, APIGatewayTokenAuthorizerEvent } from "aws-lambda";
 import {
   createRemoteJWKSet,
@@ -40,32 +41,62 @@ interface DiscoveryCacheEntry {
 
 let discoveryCache: DiscoveryCacheEntry | undefined;
 
+const logger = new Logger({
+  logRecordOrder: ["level", "message"],
+  serviceName: "mondo-rest-api-authorizer",
+});
+
 export const handler = createRestApiAuthorizerHandler();
 
 export function createRestApiAuthorizerHandler(options: RestApiAuthorizerHandlerOptions = {}) {
   return async (event: APIGatewayTokenAuthorizerEvent): Promise<APIGatewayAuthorizerResult> => {
-    const token = getBearerToken(event.authorizationToken);
-    const { payload } = await verifyToken(token);
+    logger.info("REST API authorizer request received", {
+      hasAuthorizationToken: Boolean(event.authorizationToken),
+      methodArn: event.methodArn,
+    });
 
-    assertRequiredClaims(payload, getRequiredClaims());
-    await validateCustomClaims(payload, options.validateClaims);
+    try {
+      const token = getBearerToken(event.authorizationToken);
+      const { payload } = await verifyToken(token);
 
-    return authorizerResult({
-      context: {
+      logger.info("REST API authorizer token verified", getSafeClaimLogContext(payload));
+
+      assertRequiredClaims(payload, getRequiredClaims());
+      await validateCustomClaims(payload, options.validateClaims);
+
+      const context = {
         ...buildDefaultContext(payload),
         ...buildMappedContext(payload, getContextClaims()),
         ...(await options.buildAdditionalContext?.(payload)),
-      },
-      methodArn: event.methodArn,
-      policyStatement: {
-        ...getPolicyStatement(),
-        ...(await options.buildPolicyStatement?.({
-          claims: payload,
-          methodArn: event.methodArn,
-        })),
-      },
-      principalId: getClaim(payload, "sub") ?? "mondo-user",
-    });
+      };
+      const principalId = getClaim(payload, "sub") ?? "mondo-user";
+      const result = authorizerResult({
+        context,
+        methodArn: event.methodArn,
+        policyStatement: {
+          ...getPolicyStatement(),
+          ...(await options.buildPolicyStatement?.({
+            claims: payload,
+            methodArn: event.methodArn,
+          })),
+        },
+        principalId,
+      });
+
+      logger.info("REST API authorizer request allowed", {
+        contextKeys: Object.keys(compactContext(context)),
+        methodArn: event.methodArn,
+        principalId,
+      });
+
+      return result;
+    } catch (error) {
+      if (!isUnauthorizedError(error)) {
+        logger.error("REST API authorizer failed", { error });
+      }
+
+      throw error;
+    }
   };
 }
 
@@ -73,10 +104,26 @@ export function getBearerToken(authorizationToken?: string): string {
   const match = authorizationToken?.match(/^Bearer\s+(.+)$/i);
 
   if (!match?.[1]) {
-    throw unauthorized();
+    throw unauthorized("authorization_header_missing_or_malformed", {
+      authorizationScheme: authorizationToken?.match(/^(\S+)/)?.[1],
+      hasAuthorizationToken: Boolean(authorizationToken),
+    });
   }
 
-  return match[1].trim();
+  const token = match[1].trim();
+
+  if (!token) {
+    throw unauthorized("authorization_header_missing_or_malformed", {
+      authorizationScheme: authorizationToken?.match(/^(\S+)/)?.[1],
+      hasAuthorizationToken: Boolean(authorizationToken),
+    });
+  }
+
+  logger.debug("Bearer token extracted from authorization header", {
+    tokenLength: token.length,
+  });
+
+  return token;
 }
 
 export async function verifyToken(token: string) {
@@ -89,10 +136,15 @@ export async function verifyToken(token: string) {
   };
 
   try {
+    logger.debug("Verifying JWT", {
+      audience,
+      issuer: discovery.configuration.issuer,
+    });
+
     return await jwtVerify(token, discovery.jwks, verifyOptions);
   } catch (error) {
     if (isJwtVerificationFailure(error)) {
-      throw unauthorized();
+      throw unauthorized("jwt_verification_failed", getErrorLogContext(error));
     }
 
     throw error;
@@ -111,14 +163,26 @@ export function assertRequiredClaims(
       const hasEveryValue = expected.every((value) => actualValues.includes(String(value)));
 
       if (!hasEveryValue) {
-        throw unauthorized();
+        throw unauthorized("required_claim_values_missing", {
+          actualValues: summarizeLogValue(actualValues),
+          claimName,
+          expectedValues: expected.map(String),
+          missingExpectedValues: expected
+            .map(String)
+            .filter((value) => !actualValues.includes(value)),
+        });
       }
 
       continue;
     }
 
     if (actual !== expected) {
-      throw unauthorized();
+      throw unauthorized("required_claim_mismatch", {
+        actualValue: summarizeLogValue(actual),
+        claimName,
+        expectedValue: expected,
+        hasClaim: actual !== undefined,
+      });
     }
   }
 }
@@ -184,20 +248,41 @@ function authorizerResult(input: {
 
 async function getDiscovery(): Promise<DiscoveryCacheEntry> {
   if (discoveryCache) {
+    logger.debug("Using cached OIDC discovery configuration", {
+      issuer: discoveryCache.configuration.issuer,
+      jwksUri: discoveryCache.configuration.jwks_uri,
+    });
+
     return discoveryCache;
   }
 
   const idpDomainName = getRequiredEnv("MONDO_IDP_DOMAIN_NAME");
   const discoveryUrl = `${normalizeIssuerBaseUrl(idpDomainName)}/.well-known/openid-configuration`;
+
+  logger.info("Fetching OIDC discovery configuration", {
+    discoveryUrl,
+    idpDomainName,
+  });
+
   const response = await fetch(discoveryUrl);
 
   if (!response.ok) {
+    logger.error("OIDC discovery request failed", {
+      discoveryUrl,
+      status: response.status,
+    });
+
     throw new Error(`OIDC discovery request failed with status ${response.status}`);
   }
 
   const configuration = (await response.json()) as Partial<OpenIdConfiguration>;
 
   if (!configuration.issuer || !configuration.jwks_uri) {
+    logger.error("OIDC discovery response is missing required fields", {
+      hasIssuer: Boolean(configuration.issuer),
+      hasJwksUri: Boolean(configuration.jwks_uri),
+    });
+
     throw new Error("OIDC discovery response is missing issuer or jwks_uri");
   }
 
@@ -208,6 +293,11 @@ async function getDiscovery(): Promise<DiscoveryCacheEntry> {
     },
     jwks: createRemoteJWKSet(new URL(configuration.jwks_uri)),
   };
+
+  logger.info("OIDC discovery configuration loaded", {
+    issuer: discoveryCache.configuration.issuer,
+    jwksUri: discoveryCache.configuration.jwks_uri,
+  });
 
   return discoveryCache;
 }
@@ -250,8 +340,11 @@ async function validateCustomClaims(
 ): Promise<void> {
   try {
     await validateClaims?.(claims);
-  } catch {
-    throw unauthorized();
+  } catch (error) {
+    throw unauthorized("custom_claim_validation_failed", {
+      ...getSafeClaimLogContext(claims),
+      ...getErrorLogContext(error),
+    });
   }
 }
 
@@ -274,13 +367,26 @@ function parseJsonEnv<T>(name: string): T | undefined {
     return undefined;
   }
 
-  return JSON.parse(rawValue) as T;
+  try {
+    return JSON.parse(rawValue) as T;
+  } catch (error) {
+    logger.error("Environment variable contains invalid JSON", {
+      ...getErrorLogContext(error),
+      envName: name,
+    });
+
+    throw error;
+  }
 }
 
 function getRequiredEnv(name: string): string {
   const value = process.env[name];
 
   if (!value) {
+    logger.error("Required environment variable is missing", {
+      envName: name,
+    });
+
     throw new Error(`${name} is required`);
   }
 
@@ -341,6 +447,63 @@ function compactContext<T extends string | number | boolean>(
   );
 }
 
-function unauthorized(): Error {
+function getSafeClaimLogContext(claims: JWTPayload): Record<string, string> {
+  return compactContext({
+    appId: getClaim(claims, "azp"),
+    audience: getClaim(claims, "aud"),
+    issuer: getClaim(claims, "iss"),
+    subject: getClaim(claims, "sub"),
+    tenantId: getClaim(claims, "tnt"),
+  });
+}
+
+function getErrorLogContext(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) {
+    return { error };
+  }
+
+  return compactContext({
+    errorClaim: getUnknownProperty(error, "claim"),
+    errorCode: getUnknownProperty(error, "code"),
+    errorMessage: error.message,
+    errorName: error.name,
+    errorReason: getUnknownProperty(error, "reason"),
+  });
+}
+
+function getUnknownProperty(value: object, key: string): string | undefined {
+  const propertyValue = (value as Record<string, unknown>)[key];
+
+  return typeof propertyValue === "string" ? propertyValue : undefined;
+}
+
+function summarizeLogValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => summarizeLogValue(item));
+  }
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    value === undefined ||
+    value === null
+  ) {
+    return value;
+  }
+
+  return `[${typeof value}]`;
+}
+
+function isUnauthorizedError(error: unknown): boolean {
+  return error instanceof Error && error.message === "Unauthorized";
+}
+
+function unauthorized(reason: string, attributes: Record<string, unknown> = {}): Error {
+  logger.warn("REST API authorizer request denied", {
+    ...attributes,
+    reason,
+  });
+
   return new Error("Unauthorized");
 }

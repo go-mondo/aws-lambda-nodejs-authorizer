@@ -23,6 +23,7 @@ describe("REST API authorizer helpers", () => {
 
   it("rejects missing bearer tokens as Unauthorized", () => {
     expect(() => getBearerToken("Token abc")).toThrow("Unauthorized");
+    expect(() => getBearerToken("Bearer    ")).toThrow("Unauthorized");
   });
 
   it("builds default Mondo context from token claims", () => {

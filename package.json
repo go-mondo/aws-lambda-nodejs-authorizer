@@ -41,6 +41,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
+    "@aws-lambda-powertools/logger": "^2.33.0",
     "jose": "^6.1.0"
   },
   "peerDependencies": {
