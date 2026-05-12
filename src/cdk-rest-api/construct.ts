@@ -20,7 +20,7 @@ export interface MondoAuthorizerHandlerProps extends NodejsFunctionProps {
    *
    * Examples: `mondo.auth.mondoidentity.com` or `https://mondo.auth.mondoidentity.com`.
    */
-  readonly mondoIdpDomainName?: string;
+  readonly domainName?: string;
 
   /**
    * Expected JWT audience. Passed to jose's JWT verification options.
@@ -98,8 +98,8 @@ function buildMondoEnvironment(props: MondoAuthorizerHandlerProps): Record<strin
     environment.MONDO_AUDIENCE = JSON.stringify(props.audience);
   }
 
-  if (props.mondoIdpDomainName) {
-    environment.MONDO_IDP_DOMAIN_NAME = props.mondoIdpDomainName;
+  if (props.domainName) {
+    environment.MONDO_IDP_DOMAIN_NAME = props.domainName;
   }
 
   if (props.requiredClaims) {

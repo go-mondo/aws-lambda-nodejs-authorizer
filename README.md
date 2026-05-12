@@ -19,7 +19,7 @@ const authorizerHandler = new MondoAuthorizerHandler(this, "MondoAuthorizerHandl
     scopes: "scope",
   },
   audience: "https://app.mondoidentity.com",
-  mondoIdpDomainName: "mondo.auth.mondoidentity.com",
+  domainName: "mondo.auth.mondoidentity.com",
   requiredClaims: {
     scope: ["openid", "email"],
   },
@@ -100,7 +100,7 @@ const authorizerHandler = new MondoAuthorizerHandler(this, "MondoAuthorizerHandl
   environment: {
     EXPECTED_MONDO_APP_ID: "app_123",
   },
-  mondoIdpDomainName: "mondo.auth.mondoidentity.com",
+  domainName: "mondo.auth.mondoidentity.com",
   audience: "https://app.mondoidentity.com",
 });
 ```

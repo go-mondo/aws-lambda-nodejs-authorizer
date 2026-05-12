@@ -17,7 +17,7 @@ describe("MondoAuthorizer", () => {
       environment: {
         EXPECTED_MONDO_APP_ID: "app_123",
       },
-      mondoIdpDomainName: "mondo.auth.mondoidentity.com",
+      domainName: "mondo.auth.mondoidentity.com",
       requiredClaims: {
         scope: ["openid", "email"],
       },
