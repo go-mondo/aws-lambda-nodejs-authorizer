@@ -217,6 +217,25 @@ export function getScopes(
   return normalizeClaimValues(claims[claimName]);
 }
 
+export function buildAllMethodsResource(methodArn: string): string {
+  const arnParts = methodArn.split(":");
+  const executeApiResource = arnParts[5];
+
+  if (!executeApiResource) {
+    return methodArn;
+  }
+
+  const [apiId, stage] = executeApiResource.split("/");
+
+  if (!apiId || !stage) {
+    return methodArn;
+  }
+
+  arnParts[5] = `${apiId}/${stage}/*/*`;
+
+  return arnParts.join(":");
+}
+
 function authorizerResult(input: {
   readonly context: Record<string, string | number | boolean | undefined>;
   readonly methodArn: string;
