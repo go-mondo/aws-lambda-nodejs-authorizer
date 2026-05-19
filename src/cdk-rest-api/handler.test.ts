@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertRequiredClaims,
+  buildAllMethodsResource,
   buildDefaultContext,
   buildMappedContext,
   getBearerToken,
@@ -80,6 +81,23 @@ describe("REST API authorizer helpers", () => {
       "api:write",
     ]);
     expect(getScopes({})).toEqual([]);
+  });
+
+  it("builds an execute-api resource that covers all methods in the stage", () => {
+    expect(
+      buildAllMethodsResource(
+        "arn:aws:execute-api:us-east-1:123456789012:a1b2c3d4e5/prod/GET/customers/123",
+      ),
+    ).toBe("arn:aws:execute-api:us-east-1:123456789012:a1b2c3d4e5/prod/*/*");
+  });
+
+  it("keeps malformed method ARNs unchanged when an all-methods resource cannot be built", () => {
+    expect(buildAllMethodsResource("arn:aws:execute-api:us-east-1:123456789012")).toBe(
+      "arn:aws:execute-api:us-east-1:123456789012",
+    );
+    expect(buildAllMethodsResource("arn:aws:execute-api:us-east-1:123456789012:a1b2c3d4e5")).toBe(
+      "arn:aws:execute-api:us-east-1:123456789012:a1b2c3d4e5",
+    );
   });
 
   it("validates required claims", () => {
