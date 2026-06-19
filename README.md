@@ -20,6 +20,7 @@ const authorizerHandler = new MondoAuthorizerHandler(this, "MondoAuthorizerHandl
   },
   audience: "https://app.mondoidentity.com",
   domainName: "mondo.auth.mondoidentity.com",
+  idpRequestTimeout: Duration.millis(1500),
   requiredClaims: {
     scope: ["openid", "email"],
   },
@@ -42,6 +43,8 @@ new apigateway.RestApi(this, "Api").root.addMethod("GET", integration, {
 handler entry configured by default. The Lambda handler parses bearer tokens, discovers issuer and
 JWKS metadata from `/.well-known/openid-configuration`, verifies JWTs with `jose`, validates issuer,
 audience, and expiration, then returns `tenantId`, `appId`, and `userId` in the authorizer context.
+Use `idpRequestTimeout` to cap cold OIDC discovery and JWKS requests; timeout failures are logged as
+operational failures rather than returned as `Unauthorized`.
 
 Additional claim validation can be configured through `MONDO_REQUIRED_CLAIMS`, additional context
 values can be mapped through `MONDO_CONTEXT_CLAIMS`, and the returned IAM statement can be

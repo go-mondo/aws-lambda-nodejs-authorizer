@@ -1,4 +1,4 @@
-import { App, Stack } from "aws-cdk-lib";
+import { App, Duration, Stack } from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
 import { RestApi } from "aws-cdk-lib/aws-apigateway";
 import { describe, expect, it } from "vitest";
@@ -18,6 +18,7 @@ describe("MondoAuthorizer", () => {
         EXPECTED_MONDO_APP_ID: "app_123",
       },
       domainName: "mondo.auth.mondoidentity.com",
+      idpRequestTimeout: Duration.millis(1500),
       requiredClaims: {
         scope: ["openid", "email"],
       },
@@ -41,6 +42,7 @@ describe("MondoAuthorizer", () => {
           MONDO_AUDIENCE: "https://app.mondoidentity.com",
           MONDO_CONTEXT_CLAIMS: '{"scopes":"scope"}',
           MONDO_IDP_DOMAIN_NAME: "mondo.auth.mondoidentity.com",
+          MONDO_IDP_REQUEST_TIMEOUT_MS: "1500",
           MONDO_REQUIRED_CLAIMS: '{"scope":["openid","email"]}',
           CUSTOM_VALIDATION_MODE: "strict",
           EXPECTED_MONDO_APP_ID: "app_123",

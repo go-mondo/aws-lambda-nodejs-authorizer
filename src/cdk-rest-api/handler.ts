@@ -11,6 +11,12 @@ import {
 export type ClaimExpectation = string | number | boolean | string[] | number[] | boolean[];
 
 export interface RestApiAuthorizerHandlerOptions {
+  /**
+   * Timeout, in milliseconds, for IdP HTTP requests made while loading OIDC discovery metadata and
+   * JWKS signing keys. When omitted, discovery fetches use the runtime default and jose's JWKS
+   * default timeout applies.
+   */
+  readonly idpRequestTimeoutMs?: number;
   readonly validateClaims?: (claims: JWTPayload) => void | Promise<void>;
   readonly buildAdditionalContext?: (
     claims: JWTPayload,
@@ -36,10 +42,15 @@ interface OpenIdConfiguration {
 
 interface DiscoveryCacheEntry {
   readonly configuration: OpenIdConfiguration;
+  readonly idpRequestTimeoutMs?: number;
+  readonly jwksRequestTimeoutMs: number;
   readonly jwks: ReturnType<typeof createRemoteJWKSet>;
 }
 
 let discoveryCache: DiscoveryCacheEntry | undefined;
+
+const defaultJwksRequestTimeoutMs = 5000;
+const idpRequestTimeoutEnvName = "MONDO_IDP_REQUEST_TIMEOUT_MS";
 
 const logger = new Logger({
   logRecordOrder: ["level", "message"],
@@ -52,7 +63,9 @@ export function createRestApiAuthorizerHandler(options: RestApiAuthorizerHandler
   return async (event: APIGatewayTokenAuthorizerEvent): Promise<APIGatewayAuthorizerResult> => {
     try {
       const token = getBearerToken(event.authorizationToken);
-      const { payload } = await verifyToken(token);
+      const { payload } = await verifyToken(token, {
+        idpRequestTimeoutMs: options.idpRequestTimeoutMs,
+      });
 
       logger.info("Token verified", { context: getSafeClaimLogContext(payload) });
 
@@ -119,8 +132,11 @@ export function getBearerToken(authorizationToken?: string): string {
   return token;
 }
 
-export async function verifyToken(token: string) {
-  const discovery = await getDiscovery();
+export async function verifyToken(
+  token: string,
+  options: Pick<RestApiAuthorizerHandlerOptions, "idpRequestTimeoutMs"> = {},
+) {
+  const discovery = await getDiscovery(options);
   const audience = getAudience();
   const verifyOptions: JWTVerifyOptions = {
     audience,
@@ -138,6 +154,16 @@ export async function verifyToken(token: string) {
 
     return await jwtVerify(token, discovery.jwks, verifyOptions);
   } catch (error) {
+    if (error instanceof errors.JWKSTimeout) {
+      logger.error("JWKS request timed out", {
+        jwksUri: discovery.configuration.jwks_uri,
+        timeoutMs: discovery.jwksRequestTimeoutMs,
+        ...getErrorLogContext(error),
+      });
+
+      throw error;
+    }
+
     if (isJwtVerificationFailure(error)) {
       throw unauthorized("jwt_verification_failed", getErrorLogContext(error));
     }
@@ -241,7 +267,9 @@ function authorizerResult(input: {
   };
 }
 
-async function getDiscovery(): Promise<DiscoveryCacheEntry> {
+async function getDiscovery(
+  options: Pick<RestApiAuthorizerHandlerOptions, "idpRequestTimeoutMs"> = {},
+): Promise<DiscoveryCacheEntry> {
   if (discoveryCache) {
     logger.debug("Using cached OIDC discovery configuration");
 
@@ -251,13 +279,15 @@ async function getDiscovery(): Promise<DiscoveryCacheEntry> {
   const idpDomainName = getRequiredEnv("MONDO_IDP_DOMAIN_NAME");
   const normalizedIdpDomainName = stripWrappingQuotes(idpDomainName);
   const discoveryUrl = `${normalizeIssuerBaseUrl(normalizedIdpDomainName)}/.well-known/openid-configuration`;
+  const idpRequestTimeoutMs = getIdpRequestTimeoutMs(options.idpRequestTimeoutMs);
 
   logger.info("Fetching OIDC discovery configuration", {
     discoveryUrl,
     idpDomainName: normalizedIdpDomainName,
+    timeoutMs: idpRequestTimeoutMs,
   });
 
-  const response = await fetch(discoveryUrl);
+  const response = await fetchDiscovery(discoveryUrl, idpRequestTimeoutMs);
 
   if (!response.ok) {
     logger.error("OIDC discovery request failed", {
@@ -284,7 +314,12 @@ async function getDiscovery(): Promise<DiscoveryCacheEntry> {
       issuer: configuration.issuer,
       jwks_uri: configuration.jwks_uri,
     },
-    jwks: createRemoteJWKSet(new URL(configuration.jwks_uri)),
+    idpRequestTimeoutMs,
+    jwksRequestTimeoutMs: idpRequestTimeoutMs ?? defaultJwksRequestTimeoutMs,
+    jwks: createRemoteJWKSet(
+      new URL(configuration.jwks_uri),
+      idpRequestTimeoutMs === undefined ? undefined : { timeoutDuration: idpRequestTimeoutMs },
+    ),
   };
 
   logger.info("OIDC discovery configuration loaded", {
@@ -293,6 +328,45 @@ async function getDiscovery(): Promise<DiscoveryCacheEntry> {
   });
 
   return discoveryCache;
+}
+
+async function fetchDiscovery(
+  discoveryUrl: string,
+  timeoutMs: number | undefined,
+): Promise<Response> {
+  try {
+    if (timeoutMs === undefined) {
+      return await fetch(discoveryUrl);
+    }
+
+    return await fetch(discoveryUrl, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    if (isTimeoutError(error)) {
+      logger.error("OIDC discovery request timed out", {
+        discoveryUrl,
+        timeoutMs,
+        ...getErrorLogContext(error),
+      });
+    }
+
+    throw error;
+  }
+}
+
+function getIdpRequestTimeoutMs(override: number | undefined): number | undefined {
+  const rawValue = override ?? parseNumberEnv(idpRequestTimeoutEnvName);
+
+  if (rawValue === undefined) {
+    return undefined;
+  }
+
+  if (!Number.isFinite(rawValue) || rawValue <= 0 || !Number.isInteger(rawValue)) {
+    throw new Error(`${idpRequestTimeoutEnvName} must be a positive integer`);
+  }
+
+  return rawValue;
 }
 
 function getAudience(): string | string[] {
@@ -370,6 +444,16 @@ function parseJsonEnv<T>(name: string): T | undefined {
 
     throw error;
   }
+}
+
+function parseNumberEnv(name: string): number | undefined {
+  const rawValue = process.env[name];
+
+  if (!rawValue) {
+    return undefined;
+  }
+
+  return Number(rawValue);
 }
 
 function getRequiredEnv(name: string): string {
@@ -503,6 +587,16 @@ function summarizeLogValue(value: unknown): unknown {
 
 function isUnauthorizedError(error: unknown): boolean {
   return error instanceof Error && error.message === "Unauthorized";
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError")
+  );
+}
+
+export function resetDiscoveryCacheForTesting(): void {
+  discoveryCache = undefined;
 }
 
 function unauthorized(reason: string, attributes: Record<string, unknown> = {}): Error {

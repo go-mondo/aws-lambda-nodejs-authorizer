@@ -6,6 +6,7 @@ import {
   getBearerToken,
   getClaim,
   getScopes,
+  resetDiscoveryCacheForTesting,
   verifyToken,
 } from "./handler.js";
 
@@ -14,6 +15,8 @@ describe("REST API authorizer helpers", () => {
     vi.unstubAllGlobals();
     delete process.env.MONDO_AUDIENCE;
     delete process.env.MONDO_IDP_DOMAIN_NAME;
+    delete process.env.MONDO_IDP_REQUEST_TIMEOUT_MS;
+    resetDiscoveryCacheForTesting();
   });
 
   it("extracts bearer tokens", () => {
@@ -124,6 +127,43 @@ describe("REST API authorizer helpers", () => {
     await expect(verifyToken("not-a-jwt")).rejects.toThrow("Unauthorized");
     expect(fetch).toHaveBeenCalledWith(
       "https://mondo.auth.mondoidentity.com/.well-known/openid-configuration",
+    );
+  });
+
+  it("applies a configured timeout to OIDC discovery", async () => {
+    process.env.MONDO_AUDIENCE = "https://app.mondoidentity.com";
+    process.env.MONDO_IDP_DOMAIN_NAME = "mondo.auth.mondoidentity.com";
+    const fetch = vi.fn(async () =>
+      Response.json({
+        issuer: "https://mondo.auth.mondoidentity.com",
+        jwks_uri: "https://mondo.auth.mondoidentity.com/.well-known/jwks.json",
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(verifyToken("not-a-jwt", { idpRequestTimeoutMs: 1500 })).rejects.toThrow(
+      "Unauthorized",
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "https://mondo.auth.mondoidentity.com/.well-known/openid-configuration",
+      {
+        signal: expect.any(AbortSignal),
+      },
+    );
+  });
+
+  it("keeps OIDC discovery timeouts as operational failures", async () => {
+    process.env.MONDO_AUDIENCE = "https://app.mondoidentity.com";
+    process.env.MONDO_IDP_DOMAIN_NAME = "mondo.auth.mondoidentity.com";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new DOMException("request timed out", "TimeoutError");
+      }),
+    );
+
+    await expect(verifyToken("not-a-jwt", { idpRequestTimeoutMs: 1500 })).rejects.toThrow(
+      "request timed out",
     );
   });
 });

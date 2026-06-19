@@ -28,6 +28,13 @@ export interface MondoAuthorizerHandlerProps extends NodejsFunctionProps {
   readonly audience?: string | string[];
 
   /**
+   * Timeout for IdP HTTP requests used to load OIDC discovery metadata and JWKS signing keys.
+   *
+   * When omitted, discovery fetches use the runtime default and jose's JWKS default timeout applies.
+   */
+  readonly idpRequestTimeout?: Duration;
+
+  /**
    * Additional exact-match claim requirements evaluated after JWT verification.
    *
    * Arrays mean the JWT claim must contain every configured value. This works for either array
@@ -101,6 +108,10 @@ function buildMondoEnvironment(props: MondoAuthorizerHandlerProps): Record<strin
 
   if (props.domainName) {
     environment.MONDO_IDP_DOMAIN_NAME = props.domainName;
+  }
+
+  if (props.idpRequestTimeout) {
+    environment.MONDO_IDP_REQUEST_TIMEOUT_MS = String(props.idpRequestTimeout.toMilliseconds());
   }
 
   if (props.requiredClaims) {
