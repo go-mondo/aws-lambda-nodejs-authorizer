@@ -44,7 +44,9 @@ handler entry configured by default. The Lambda handler parses bearer tokens, di
 JWKS metadata from `/.well-known/openid-configuration`, verifies JWTs with `jose`, validates issuer,
 audience, and expiration, then returns `tenantId`, `appId`, and `userId` in the authorizer context.
 Use `idpRequestTimeout` to cap cold OIDC discovery and JWKS requests; timeout failures are logged as
-operational failures rather than returned as `Unauthorized`.
+operational failures rather than returned as `Unauthorized`. When omitted, OIDC discovery uses the
+runtime `fetch` default, JWKS uses `jose`'s 5-second default, and the Lambda still uses the CDK
+`NodejsFunction` default timeout unless you override it.
 
 Additional claim validation can be configured through `MONDO_REQUIRED_CLAIMS`, additional context
 values can be mapped through `MONDO_CONTEXT_CLAIMS`, and the returned IAM statement can be
