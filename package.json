@@ -56,6 +56,14 @@
     "aws-cdk-lib": "^2.253.0",
     "constructs": "^10.4.2"
   },
+  "peerDependenciesMeta": {
+    "aws-cdk-lib": {
+      "optional": true
+    },
+    "constructs": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.3.7",
     "@commitlint/cli": "^20.1.0",
