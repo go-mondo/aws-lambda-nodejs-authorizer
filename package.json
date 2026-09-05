@@ -1,6 +1,6 @@
 {
   "name": "@go-mondo/aws-lambda-nodejs-authorizer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AWS Lambda Node.js authorizers for Mondo Identity.",
   "type": "module",
   "sideEffects": false,
