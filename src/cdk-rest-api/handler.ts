@@ -78,7 +78,7 @@ export function createRestApiAuthorizerHandler(options: RestApiAuthorizerHandler
         principalId,
       });
 
-      logger.debug("Authorizer success", { output: result });
+      logger.debug("Authorizer success", { methodArn: event.methodArn });
 
       return result;
     } catch (error) {

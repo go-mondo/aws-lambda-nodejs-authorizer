@@ -1,9 +1,25 @@
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const { logger } = vi.hoisted(() => ({
+  logger: {
+    debug: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+  },
+}));
+
+vi.mock("@aws-lambda-powertools/logger", () => ({
+  Logger: vi.fn().mockImplementation(() => logger),
+}));
+
 import {
   assertRequiredClaims,
   buildAllMethodsResource,
   buildDefaultContext,
   buildMappedContext,
+  createRestApiAuthorizerHandler,
   getBearerToken,
   getClaim,
   getScopes,
@@ -12,6 +28,7 @@ import {
 
 describe("REST API authorizer helpers", () => {
   afterEach(() => {
+    vi.clearAllMocks();
     vi.unstubAllGlobals();
     delete process.env.MONDO_AUDIENCE;
     delete process.env.MONDO_IDP_DOMAIN_NAME;
@@ -143,5 +160,58 @@ describe("REST API authorizer helpers", () => {
     expect(fetch).toHaveBeenCalledWith(
       "https://mondo.auth.mondoidentity.com/.well-known/openid-configuration",
     );
+  });
+
+  it("does not log values returned in additional authorizer context", async () => {
+    const issuer = "https://mondo.auth.mondoidentity.com";
+    const audience = "https://app.mondoidentity.com";
+    const methodArn =
+      "arn:aws:execute-api:us-east-1:123456789012:a1b2c3d4e5/prod/GET/customers/123";
+    const secret = "do-not-log";
+    const { privateKey, publicKey } = await generateKeyPair("ES256");
+    const publicJwk = {
+      ...(await exportJWK(publicKey)),
+      alg: "ES256",
+      kid: "test-key",
+      use: "sig",
+    };
+    const token = await new SignJWT({ azp: "app_123", tnt: "tnt_123" })
+      .setProtectedHeader({ alg: "ES256", kid: "test-key" })
+      .setIssuer(issuer)
+      .setAudience(audience)
+      .setSubject("usr_123")
+      .setExpirationTime("5m")
+      .sign(privateKey);
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+
+      return url.endsWith("/.well-known/openid-configuration")
+        ? Response.json({ issuer, jwks_uri: `${issuer}/.well-known/jwks.json` })
+        : Response.json({ keys: [publicJwk] });
+    });
+    vi.stubGlobal("fetch", fetch);
+    process.env.MONDO_AUDIENCE = audience;
+    process.env.MONDO_IDP_DOMAIN_NAME = "mondo.auth.mondoidentity.com";
+    logger.debug.mockClear();
+
+    const handler = createRestApiAuthorizerHandler({
+      buildAdditionalContext: () => ({ sensitiveValue: secret }),
+    });
+    const result = await handler({
+      authorizationToken: `Bearer ${token}`,
+      methodArn,
+      type: "TOKEN",
+    });
+
+    expect(result.context).toMatchObject({ sensitiveValue: secret });
+    expect(logger.debug).toHaveBeenCalledWith("Authorizer success", { methodArn });
+    expect(
+      JSON.stringify([
+        logger.debug.mock.calls,
+        logger.error.mock.calls,
+        logger.info.mock.calls,
+        logger.warn.mock.calls,
+      ]),
+    ).not.toContain(secret);
   });
 });
